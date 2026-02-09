@@ -1,29 +1,155 @@
+from rich.console import Console
+from rich.panel import Panel
+from rich.align import Align
 import os
 import time
 import json
 import datetime
 import logging
 import gspread
+import smtplib
+import requests
+from email.mime.text import MIMEText
+from email.mime.multipart import MIMEMultipart
 from google.oauth2.service_account import Credentials
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ApplicationBuilder, ContextTypes, CommandHandler, MessageHandler, CallbackQueryHandler, filters
 from dotenv import load_dotenv
 import google.generativeai as genai
 
-#variable de entorno
+# variable de entorno
 load_dotenv()
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
 SHEET_ID = os.getenv("SHEET_ID")
 ADMIN_ID = int(os.getenv("ADMIN_ID"))
+EMAIL_SENDER = os.getenv("EMAIL_SENDER")
+EMAIL_PASSWORD = os.getenv("EMAIL_PASSWORD")
 
 # Configuración de Gemini
 genai.configure(api_key=GOOGLE_API_KEY)
 model = genai.GenerativeModel('models/gemini-2.5-flash-preview-09-2025')
 
-# Configuración de Logs
 logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO)
 logging.getLogger("httpx").setLevel(logging.WARNING)
+
+def mostrar_banner():
+    console = Console()
+    mensaje = "[bold white]VINLUME DISK[/]\n[dim]Mini CD Keychains • Chile[/]"
+    panel = Panel(
+        Align.center(mensaje, vertical="middle"),
+        border_style="white",
+        title="💿 System Online",
+        subtitle="v2.0",
+        padding=(1, 10), # Relleno
+        style="on black" 
+    )
+    console.print(panel)
+
+def enviar_correo_confirmacion(destinatario, datos):
+    if not EMAIL_SENDER or not EMAIL_PASSWORD:
+        print("⚠️ ERROR: Faltan credenciales de correo en .env")
+        return False
+
+    # 1. ya no quiero apis
+    print(f"🔎 Buscando portada para: {datos['diseno']}...")
+    url_portada = buscar_portada_album(datos['diseno'])
+
+    print(f"📧 Enviando correo a {destinatario}...")
+    
+    msg = MIMEMultipart()
+    msg['From'] = f"VinLume Disk <{EMAIL_SENDER}>"
+    msg['To'] = destinatario
+    msg['Subject'] = f"Tu Pedido está en Producción 💿 - VinLume Disk"
+
+    # HTML BASURA, MEJORAR DESPUES
+    cuerpo = f"""
+    <html>
+      <body style="font-family: 'Helvetica', Arial, sans-serif; color: #333; background-color: #f4f4f4; padding: 20px;">
+        
+        <div style="max-width: 600px; margin: 0 auto; background-color: #ffffff; border-radius: 8px; overflow: hidden; box-shadow: 0 4px 10px rgba(0,0,0,0.1);">
+            
+            <div style="background-color: #000; color: #fff; padding: 20px; text-align: center;">
+                <h1 style="margin: 0; font-size: 24px;">VinLume Disk</h1>
+                <p style="margin: 5px 0 0 0; font-size: 14px; color: #ccc;">Confirmación de Compra</p>
+            </div>
+
+            <div style="padding: 20px; text-align: center; background-color: #eee;">
+                <p style="color: #000; font-weight: bold;">✅ PAGO APROBADO &rarr; EN PRODUCCIÓN</p>
+            </div>
+
+            <div style="padding: 30px;">
+                <h2 style="color: #333; border-bottom: 2px solid #eee; padding-bottom: 10px;">Detalle del pedido</h2>
+                
+                <table style="width: 100%; border-collapse: collapse; margin-top: 20px;">
+                    <tr>
+                        <td style="width: 120px; vertical-align: top; padding-right: 20px;">
+                            <img src="{url_portada}" alt="Portada Album" style="width: 120px; height: 120px; object-fit: cover; border-radius: 10px; box-shadow: 0 2px 5px rgba(0,0,0,0.2);">
+                        </td>
+                        
+                        <td style="vertical-align: top;">
+                            <h3 style="margin: 0 0 10px 0; color: #000; font-size: 18px;">{datos['diseno']}</h3>
+                            <p style="margin: 0; color: #666;">Tipo: {datos['tipo']}</p>
+                            <p style="margin: 5px 0 0 0; color: #666;">Cantidad: {datos['cantidad']}</p>
+                            <h2 style="margin: 15px 0 0 0; color: #2ecc71;">${datos['total']} CLP</h2>
+                        </td>
+                    </tr>
+                </table>
+
+                <br><hr style="border: 0; border-top: 1px solid #eee;"><br>
+
+                <p><strong>Dirección de envío:</strong><br>{datos.get('direccion', 'No especificada')}</p>
+                
+                <div style="margin-top: 30px; padding: 15px; background-color: #f9f9f9; border-radius: 5px; font-size: 12px; color: #777; text-align: center;">
+                    Gracias por confiar en VinLume Disk.<br>
+                    Te notificaremos cuando tu pedido sea despachado 🚚.
+                </div>
+            </div>
+        </div>
+      </body>
+    </html>
+    """
+    
+    msg.attach(MIMEText(cuerpo, 'html'))
+
+    try:
+        server = smtplib.SMTP('smtp.gmail.com', 587)
+        server.starttls()
+        server.login(EMAIL_SENDER, EMAIL_PASSWORD)
+        server.send_message(msg)
+        server.quit()
+        print("✅ Correo enviado con éxito.")
+        return True
+    except Exception as e:
+        print(f"Error enviando correo: {e}")
+        return False
+
+
+def buscar_portada_album(busqueda):
+    """
+    Busca la carátula del álbum en la API de iTunes y devuelve la URL.
+    Si no encuentra nada, devuelve una imagen genérica de 'No Image'.
+    """
+    try:
+        url = "https://itunes.apple.com/search"
+        params = {
+            "term": busqueda,
+            "media": "music",
+            "entity": "album",
+            "limit": 1
+        }
+        response = requests.get(url, params=params)
+        data = response.json()
+        
+        if data["resultCount"] > 0:
+            # Reescalalo
+            imagen_url = data["results"][0]["artworkUrl100"]
+            return imagen_url.replace("100x100bb", "600x600bb")
+    except Exception as e:
+        print(f"Error buscando carátula: {e}")
+    
+    # Imagen por defecto si no encuentra nada la api penca de itunes
+    return "https://cdn-icons-png.flaticon.com/512/8660/8660552.png"
 
 def conectar_google_sheets():
     scopes = [
@@ -121,12 +247,7 @@ def pensar_respuesta(mensaje, catalogo):
 pedidos_pendientes = {}
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await context.bot.send_message(update.effective_chat.id, """¡Hola! 💿 Bienvenido a Vinlume Disk. 
-                                                                tienda chilena de llaveros mini CD personalizados 
-                                                                ▶️ ¿Qué álbum quieres en tu llavero?
-                                                                ▶️ ¿Deseas Informacion?
-                                                                   
-                                                                estoy a la espera de tu respuesta. 😊""")
+    await context.bot.send_message(update.effective_chat.id, "¡Hola! 💿 Bienvenido a Vinlume Disk\nTienda chilena de llaveros mini CD personalizados\n▶️ ¿Qué álbum quieres en tu llavero?\n▶️ ¿Deseas Informacion?estoy a la espera de tu respuesta. 😊")
 
 async def manejar_mensaje(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_text = update.message.text
@@ -215,7 +336,7 @@ async def manejar_foto(update: Update, context: ContextTypes.DEFAULT_TYPE):
         pedidos_pendientes[chat_id]['foto_id'] = update.message.photo[-1].file_id
         pedidos_pendientes[chat_id]['paso'] = 'esperando_telefono'
         
-        await context.bot.send_message(chat_id, "💯 Comprobante recibido. \n📞 Para gestionar el envío, necesito tu número de teléfono:\nEjemplo: +56912345678")
+        await context.bot.send_message(chat_id, "✅✅ Comprobante recibido. \n📞 Para gestionar el envío, necesito tu número de teléfono:\nEjemplo: +56912345678")
     else:
         await context.bot.send_message(chat_id, "No tengo un pedido activo tuyo. Porfavor dime primero qué quieres comprar 😊.")
 
@@ -233,7 +354,13 @@ async def decision_admin(update: Update, context: ContextTypes.DEFAULT_TYPE):
             exito = registrar_venta_en_excel(p)
             
             if exito:
-                await context.bot.send_message(chat_cliente, "🎉 ¡Pago confirmado! 🎉 \nTu pedido pasara a producción y se te informara su avance.")
+                # arreglar esta tonteria despues
+                if p.get('email') and '@' in p['email']:
+                    enviar_correo_confirmacion(p['email'], p)
+                else:
+                    print("⚠️ No se envió correo: Email inválido o no proporcionado.")
+
+                await context.bot.send_message(chat_cliente, "🎉 ¡Pago confirmado! 🎉 \nTu pedido pasara a producción y se te informara su avance. \n📧 Se te ha enviado un comprobante a tu correo.")
                 await q.edit_message_caption(caption=f"{q.message.caption}\n\n✅ GUARDADO Y CONFIRMADO ")
             else:
                 await q.edit_message_caption(caption=f"{q.message.caption}\n\n⚠️ ERROR DE CONEXIÓN A LA BBDD")
@@ -249,11 +376,7 @@ async def decision_admin(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await q.edit_message_caption(caption="⚠️ Este pedido ya expiró o ya fue procesado.")
 
 if __name__ == '__main__':
-    #print("hola mundo")
-    print(" ")
-    print("======================================")
-    print("=== VINLUME BOT 1.0 por @jack722x ===")
-    print("========= 📀VinlumeDisk📀 ===========")
+    mostrar_banner()
     app = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
     
     app.add_handler(CommandHandler('start', start))
@@ -262,5 +385,3 @@ if __name__ == '__main__':
     app.add_handler(CallbackQueryHandler(decision_admin))
     
     app.run_polling()
-
-
