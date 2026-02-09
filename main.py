@@ -53,27 +53,31 @@ def obtener_catalogo():
         {"Producto": "Llavero Mini CD con NFC", "Precio": 5000}
     ]
 
-def registrar_venta_en_excel(diseno, tipo, cantidad, precio_unit, total):
-    print(f"📤 Conectando a Excel para guardar: {diseno}...") 
+def registrar_venta_en_excel(datos):
+    print(f"📤 Conectando a Excel para guardar: {datos['diseno']}...") 
     try:
         sheet = conectar_google_sheets() 
         fecha_actual = datetime.datetime.now().strftime("%d/%m/%Y")
-        tiene_nfc = "Sí" if "nfc" in str(tipo).lower() else "No"
+        tiene_nfc = "Sí" if "nfc" in str(datos['tipo']).lower() else "No"
         cadena_extra = "Ninguna" 
         
-#Mapeo de columnas
+        #Plantilla para el Mapeo de columnas en GOOGLE SHEETS empresas futuras 👹👹:
         nueva_fila = [
             fecha_actual,       # A: Fecha
-            diseno,             # B: Diseño
+            datos['diseno'],    # B: Diseño
             tiene_nfc,          # C: NFC
             cadena_extra,       # D: Cadena
-            cantidad,           # E: Cantidad
-            precio_unit,        # F: Precio Unit
-            total,              # G: Total
-            "Transferencia",    # H: Método
-            "Pagado",           # I: Estado Pago
-            "Pendiente",        # J: Estado Prod
-            "Pendiente"         # K: Estado Entrega
+            datos['cantidad'],  # E: Cantidad
+            datos['precio'],    # F: Precio Unit
+            datos['total'],     # G: Total
+            datos.get('telefono', '-'),  # H: Teléfono
+            datos.get('email', '-'),     # I: Email
+            datos.get('direccion', '-'), # J: Dirección
+            "Transferencia",    # K: Método
+            "Pagado",           # L: Estado Pago
+            "Pendiente",        # M: Estado Prod
+            "Pendiente",        # N: Estado Entrega
+            datos['cliente']    # O: Nombre Cliente
         ]
         
         sheet.append_row(nueva_fila)
@@ -90,7 +94,7 @@ def pensar_respuesta(mensaje, catalogo):
     prompt = f"""
     Eres VinlumeBot.
     CATÁLOGO: {catalogo_str}
-    OBJETIVO: Vender Llaveros Mini CD a toda costa ($4000) o con NFC ($5000).
+    OBJETIVO: Vender Llaveros Mini CD a toda costa se ordenado y usa emojis para un mejor feedback ($4000) o con NFC ($5000).
     SI EL CLIENTE QUIERE COMPRAR, RESPONDE SOLO UN JSON (sin texto extra):
 
     {{
@@ -121,13 +125,54 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
                                                                 tienda chilena de llaveros mini CD personalizados 
                                                                 ▶️ ¿Qué álbum quieres en tu llavero?
                                                                 ▶️ ¿Deseas Informacion?
-                                   
+                                                                   
                                                                 estoy a la espera de tu respuesta. 😊""")
 
 async def manejar_mensaje(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_text = update.message.text
     chat_id = update.effective_chat.id
     
+    # captura de datos del cliente /esto es fase beta/
+    # Si el cliente está en medio de un pedido mando foto
+    if chat_id in pedidos_pendientes:
+        p = pedidos_pendientes[chat_id]
+        paso = p.get('paso')
+        
+        if paso == 'esperando_telefono':
+            p['telefono'] = user_text
+            p['paso'] = 'esperando_email'
+            await context.bot.send_message(chat_id, "📧 Gracias. Ahora, \n¿cuál es tu email para enviarte la boleta? 😊")
+            return
+
+        elif paso == 'esperando_email':
+            p['email'] = user_text
+            p['paso'] = 'esperando_direccion'
+            await context.bot.send_message(chat_id, "🚚 Último dato: \n¿Cuál es tu dirección de envío/entrega? 📤")
+            return
+            #se supone que esto va al admin de forma exclusiva. hacer mas tests
+        elif paso == 'esperando_direccion':
+            p['direccion'] = user_text
+            caption = (f"🚨 NUEVO PEDIDO COMPLETO\n"
+                       f"👤 {p['cliente']}\n"
+                       f"💿 {p['detalle_txt']}\n"
+                       f"💰 ${p['total']}\n"
+                       f"📞 {p['telefono']}\n"
+                       f"📧 {p['email']}\n"
+                       f"🚚 {p['direccion']}")
+            
+            kb = [
+                [InlineKeyboardButton("✅ APROBAR", callback_data=f"ok|{chat_id}")],
+                [InlineKeyboardButton("❌ RECHAZAR", callback_data=f"no|{chat_id}")],
+                [InlineKeyboardButton("⚠️ DIFERENCIA $$", callback_data=f"dif|{chat_id}")]
+            ]
+            
+            await context.bot.send_photo(ADMIN_ID, p['foto_id'], caption=caption, reply_markup=InlineKeyboardMarkup(kb))
+            await context.bot.send_message(chat_id, "📩 Datos recibidos 👀. Esperando validación de 💿 VinlumeDisk...")
+            del p['paso'] 
+            return
+        
+    # ------------------------------------------
+
     catalogo = obtener_catalogo()
     respuesta = pensar_respuesta(user_text, catalogo)
     
@@ -151,10 +196,11 @@ async def manejar_mensaje(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 "cantidad": cantidad, 
                 "precio": precio, 
                 "total": total,
-                "detalle_txt": f"{diseno} ({tipo})"
+                "detalle_txt": f"{diseno} ({tipo})",
+                "paso": "esperando_foto"
             }
             
-            await context.bot.send_message(chat_id, f"==============================\n\n✅ Pedido: {diseno}\n💿 Tipo: {tipo}\n💰 Total: ${total}\n==== DATOS DE PAGO ====\n\n JACK MAURO CARDENAS GARCIA\n RUT: 21774312-5\n BANCO: Banco Estado\n CUENTA: CuentaRUT\n NRO CUENTA: 21774312\n\n📸 Por favor, envía el comprobante de pago en este chat 👀.")
+            await context.bot.send_message(chat_id, f"==============================\n\n✅ Pedido: {diseno}\n💿 Tipo: {tipo}\n💰 Total: ${total}\n\n==============================\nDATOS DE PAGO \n============================== JACK MAURO CARDENAS GARCIA\n RUT: 21774312-5\n BANCO: Banco Estado\n CUENTA: CuentaRUT\n NRO CUENTA: 21774312\n\n📸 Por favor, envía el comprobante de pago en este chat 👀.")
         except Exception as e:
             print(f"Error parseando JSON: {e}")
             await context.bot.send_message(chat_id, "Entendí que quieres comprar, pero no capté bien el diseño \n (se claro/clara respecto al artista y su respectivo album para que su produccion sea mas rapida). \n ¿Podrías repetirlo?")
@@ -164,21 +210,14 @@ async def manejar_mensaje(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def manejar_foto(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
-    if chat_id not in pedidos_pendientes:
-        await context.bot.send_message(chat_id, "No tengo un pedido activo. Porfavor dime primero qué quieres comprar 😊.")
-        return
     
-#sistema de validacion de pago, fase de prueba
-    p = pedidos_pendientes[chat_id]
-    caption = f"🚨 NUEVO PAGO\n👤 {p['cliente']}\n💿 {p['detalle_txt']}\n💰 ${p['total']}"
-    
-    kb = [
-        [InlineKeyboardButton("✅ APROBAR Y GUARDAR", callback_data=f"ok|{chat_id}")],
-        [InlineKeyboardButton("❌ RECHAZAR", callback_data=f"no|{chat_id}")]
-    ]
-    
-    await context.bot.send_photo(ADMIN_ID, update.message.photo[-1].file_id, caption=caption, reply_markup=InlineKeyboardMarkup(kb))
-    await context.bot.send_message(chat_id, "📩 Comprobante recibido 👀. Esperando validación de 💿 VinlumeDisk...")
+    if chat_id in pedidos_pendientes and pedidos_pendientes[chat_id].get('paso') == 'esperando_foto':
+        pedidos_pendientes[chat_id]['foto_id'] = update.message.photo[-1].file_id
+        pedidos_pendientes[chat_id]['paso'] = 'esperando_telefono'
+        
+        await context.bot.send_message(chat_id, "💯 Comprobante recibido. \n📞 Para gestionar el envío, necesito tu número de teléfono:\nEjemplo: +56912345678")
+    else:
+        await context.bot.send_message(chat_id, "No tengo un pedido activo tuyo. Porfavor dime primero qué quieres comprar 😊.")
 
 async def decision_admin(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
@@ -191,28 +230,26 @@ async def decision_admin(update: Update, context: ContextTypes.DEFAULT_TYPE):
         p = pedidos_pendientes[chat_cliente]
         
         if accion == "ok":
-            exito = registrar_venta_en_excel(
-                p['diseno'], 
-                p['tipo'], 
-                p['cantidad'], 
-                p['precio'], 
-                p['total']
-            )
+            exito = registrar_venta_en_excel(p)
             
             if exito:
                 await context.bot.send_message(chat_cliente, "🎉 ¡Pago confirmado! 🎉 \nTu pedido pasara a producción y se te informara su avance.")
                 await q.edit_message_caption(caption=f"{q.message.caption}\n\n✅ GUARDADO Y CONFIRMADO ")
             else:
                 await q.edit_message_caption(caption=f"{q.message.caption}\n\n⚠️ ERROR DE CONEXIÓN A LA BBDD")
-        else:
-            await context.bot.send_message(chat_cliente, "❌ Tu pago no pudo ser verificado. Por favor, intenta nuevamente o contáctanos en:\n\n📷 Instagram: https://www.instagram.com/vinlume_disk?igsh=MTNvOXk1ZHp2Nm1xbw==\n✉️ Correo: vinlume.disk@gmail.com")
+        elif accion == "no":
+            await context.bot.send_message(chat_cliente, "❌ Tu pago no pudo ser verificado. Por favor, intenta nuevamente o contáctanos en:\n\n📷Instagram: https://www.instagram.com/vinlume_disk?igsh=MTNvOXk1ZHp2Nm1xbw==\n✉️Correo: vinlume.disk@gmail.com")
             await q.edit_message_caption(caption="🚫 PAGO RECHAZADO POR LOS ADMINISTRADORES")
-        
-        del pedidos_pendientes[chat_cliente]
+        elif accion == "dif":
+            await context.bot.send_message(chat_cliente, "⚠️ El monto transferido es incorrecto. Por favor transfiere la diferencia y envía el comprobante aquí.")
+            await q.edit_message_caption(caption=f"{q.message.caption}\n\n💸 SOLICITANDO DIFERENCIA")
+        if accion in ["ok", "no"]:
+            del pedidos_pendientes[chat_cliente]
     else:
         await q.edit_message_caption(caption="⚠️ Este pedido ya expiró o ya fue procesado.")
 
 if __name__ == '__main__':
+    #print("hola mundo")
     print(" ")
     print("======================================")
     print("=== VINLUME BOT 1.0 por @jack722x ===")
@@ -225,3 +262,5 @@ if __name__ == '__main__':
     app.add_handler(CallbackQueryHandler(decision_admin))
     
     app.run_polling()
+
+
