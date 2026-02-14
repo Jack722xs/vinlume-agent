@@ -1,14 +1,15 @@
-from rich.console import Console
-from rich.panel import Panel
-from rich.align import Align
 import os
-import time
 import json
 import datetime
 import logging
 import gspread
 import smtplib
 import requests
+import random
+import re
+from rich.console import Console
+from rich.panel import Panel
+from rich.align import Align
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 from google.oauth2.service_account import Credentials
@@ -17,371 +18,499 @@ from telegram.ext import ApplicationBuilder, ContextTypes, CommandHandler, Messa
 from dotenv import load_dotenv
 import google.generativeai as genai
 
-# variable de entorno
+# ==========================================
+# CONFIGURACIÓN
+# ==========================================
 load_dotenv()
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
-GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
+GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY") 
 SHEET_ID = os.getenv("SHEET_ID")
 ADMIN_ID = int(os.getenv("ADMIN_ID"))
 EMAIL_SENDER = os.getenv("EMAIL_SENDER")
 EMAIL_PASSWORD = os.getenv("EMAIL_PASSWORD")
+LINK_INSTAGRAM = "https://www.instagram.com/vinlume_disk/"
 
-# Configuración de Gemini
+# LÍMITE DE SEGURIDAD
+MAX_PEDIDO_AUTOMATICO = 20 
+
+# Logs
+logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO)
+logging.getLogger("httpx").setLevel(logging.WARNING)
+logging.getLogger("googleapiclient").setLevel(logging.WARNING)
+
+# Gemini AI
 genai.configure(api_key=GOOGLE_API_KEY)
 model = genai.GenerativeModel('models/gemini-2.5-flash-preview-09-2025')
 
-logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO)
-logging.getLogger("httpx").setLevel(logging.WARNING)
+sesiones = {}
+
+# ==========================================
+# UTILIDADES VISUALES
+# ==========================================
 
 def mostrar_banner():
     console = Console()
-    mensaje = "[bold white]VINLUME DISK[/]\n[dim]Mini CD Keychains • Chile[/]"
-    panel = Panel(
-        Align.center(mensaje, vertical="middle"),
-        border_style="white",
-        title="💿 System Online",
-        subtitle="v2.0",
-        padding=(1, 10), # Relleno
-        style="on black" 
-    )
+    mensaje = "[bold cyan]VINLUME DISK SYSTEM[/]\n[white]Enterprise Flow v2.0[/]"
+    panel = Panel(Align.center(mensaje, vertical="middle"), border_style="cyan", title="ONLINE", style="on black")
     console.print(panel)
+
+def limpiar_texto(texto):
+    if not texto: return ""
+    return str(texto)[:500].replace("\n", " | ").strip()
+
+def buscar_portada_album(busqueda):
+    try:
+        url = "https://itunes.apple.com/search"
+        params = {"term": busqueda, "media": "music", "entity": "album", "limit": 1}
+        response = requests.get(url, params=params, timeout=5)
+        data = response.json()
+        if data["resultCount"] > 0:
+            return data["results"][0]["artworkUrl100"].replace("100x100bb", "600x600bb")
+    except:
+        pass
+    return None
+
+# ==========================================
+# GESTIÓN DE CORREO Y EXCEL
+# ==========================================
 
 def enviar_correo_confirmacion(destinatario, datos):
     if not EMAIL_SENDER or not EMAIL_PASSWORD:
-        print("⚠️ ERROR: Faltan credenciales de correo en .env")
         return False
-
-    # 1. ya no quiero apis
-    print(f"🔎 Buscando portada para: {datos['diseno']}...")
-    url_portada = buscar_portada_album(datos['diseno'])
-
-    print(f"📧 Enviando correo a {destinatario}...")
     
+    url_portada = datos.get('url_portada')
+    if not url_portada or url_portada == "MANUAL" or len(datos['carrito']) > 1:
+        url_portada = "https://images.icon-icons.com/2008/PNG/512/compact_disc_cd_icon_123442.png"
+
+    html_items = ""
+    for item in datos['carrito']:
+        tipo = "NFC" if item['nfc'] else "Normal"
+        html_items += f"<li><b>{item['nombre']}</b> <span style='color:#666; font-size:12px;'>({tipo})</span></li>"
+
     msg = MIMEMultipart()
     msg['From'] = f"VinLume Disk <{EMAIL_SENDER}>"
     msg['To'] = destinatario
-    msg['Subject'] = f"Tu Pedido está en Producción 💿 - VinLume Disk"
+    msg['Subject'] = f"Confirmación #{datos['order_id']} 💿 - VinLume Disk"
 
-    # HTML BASURA, MEJORAR DESPUES
     cuerpo = f"""
     <html>
-      <body style="font-family: 'Helvetica', Arial, sans-serif; color: #333; background-color: #f4f4f4; padding: 20px;">
-        
-        <div style="max-width: 600px; margin: 0 auto; background-color: #ffffff; border-radius: 8px; overflow: hidden; box-shadow: 0 4px 10px rgba(0,0,0,0.1);">
+    <body style="font-family: Helvetica, Arial, sans-serif; background-color: #f4f4f4; padding: 20px;">
+      <div style="max-width: 600px; margin: 0 auto; background-color: #fff; border-radius: 8px; overflow: hidden;">
+        <div style="background-color: #000; color: #fff; padding: 20px; text-align: center;">
+            <h1 style="margin:0;">VINLUME DISK</h1>
+            <p>Pedido #{datos['order_id']}</p>
+        </div>
+        <div style="padding: 30px;">
+            <h2 style="color: #333;">¡Hola {datos['cliente']}!</h2>
+            <p>Tu pago está confirmado. Aquí está el detalle de tu producción:</p>
             
-            <div style="background-color: #000; color: #fff; padding: 20px; text-align: center;">
-                <h1 style="margin: 0; font-size: 24px;">VinLume Disk</h1>
-                <p style="margin: 5px 0 0 0; font-size: 14px; color: #ccc;">Confirmación de Compra</p>
-            </div>
-
-            <div style="padding: 20px; text-align: center; background-color: #eee;">
-                <p style="color: #000; font-weight: bold;">✅ PAGO APROBADO &rarr; EN PRODUCCIÓN</p>
-            </div>
-
-            <div style="padding: 30px;">
-                <h2 style="color: #333; border-bottom: 2px solid #eee; padding-bottom: 10px;">Detalle del pedido</h2>
-                
-                <table style="width: 100%; border-collapse: collapse; margin-top: 20px;">
-                    <tr>
-                        <td style="width: 120px; vertical-align: top; padding-right: 20px;">
-                            <img src="{url_portada}" alt="Portada Album" style="width: 120px; height: 120px; object-fit: cover; border-radius: 10px; box-shadow: 0 2px 5px rgba(0,0,0,0.2);">
-                        </td>
-                        
-                        <td style="vertical-align: top;">
-                            <h3 style="margin: 0 0 10px 0; color: #000; font-size: 18px;">{datos['diseno']}</h3>
-                            <p style="margin: 0; color: #666;">Tipo: {datos['tipo']}</p>
-                            <p style="margin: 5px 0 0 0; color: #666;">Cantidad: {datos['cantidad']}</p>
-                            <h2 style="margin: 15px 0 0 0; color: #2ecc71;">${datos['total']} CLP</h2>
-                        </td>
-                    </tr>
-                </table>
-
-                <br><hr style="border: 0; border-top: 1px solid #eee;"><br>
-
-                <p><strong>Dirección de envío:</strong><br>{datos.get('direccion', 'No especificada')}</p>
-                
-                <div style="margin-top: 30px; padding: 15px; background-color: #f9f9f9; border-radius: 5px; font-size: 12px; color: #777; text-align: center;">
-                    Gracias por confiar en VinLume Disk.<br>
-                    Te notificaremos cuando tu pedido sea despachado 🚚.
+            <div style="display: flex; gap: 20px; margin: 20px 0; background: #f9f9f9; padding: 15px; border-radius: 8px;">
+                <img src="{url_portada}" style="width: 80px; height: 80px; object-fit: cover; border-radius: 5px;">
+                <div>
+                    <ul style="margin: 0; padding-left: 20px; line-height: 1.6;">
+                        {html_items}
+                    </ul>
+                    <p style="font-weight: bold; margin-top: 10px;">Total: ${datos['total']}</p>
                 </div>
             </div>
+
+            <p><strong>📍 Envío a:</strong><br>{datos.get('direccion', '-')}</p>
+            <hr style="border:0; border-top:1px solid #eee;">
+            <p style="text-align: center;">
+                <a href="{LINK_INSTAGRAM}" style="color: #007bff; text-decoration: none;">Contactar con Soporte en Instagram</a>
+            </p>
         </div>
-      </body>
+      </div>
+    </body>
     </html>
     """
-    
     msg.attach(MIMEText(cuerpo, 'html'))
-
     try:
         server = smtplib.SMTP('smtp.gmail.com', 587)
         server.starttls()
         server.login(EMAIL_SENDER, EMAIL_PASSWORD)
         server.send_message(msg)
         server.quit()
-        print("✅ Correo enviado con éxito.")
         return True
     except Exception as e:
-        print(f"Error enviando correo: {e}")
+        print(f"❌ Error enviando correo: {e}")
         return False
 
-
-def buscar_portada_album(busqueda):
-    """
-    Busca la carátula del álbum en la API de iTunes y devuelve la URL.
-    Si no encuentra nada, devuelve una imagen genérica de 'No Image'.
-    """
+def registrar_venta_en_excel(datos):
+    print(f"log Exportando pedido #{datos['order_id']}...") 
     try:
-        url = "https://itunes.apple.com/search"
-        params = {
-            "term": busqueda,
-            "media": "music",
-            "entity": "album",
-            "limit": 1
-        }
-        response = requests.get(url, params=params)
-        data = response.json()
+        items_str = []
+        tiene_nfc_global = "No"
         
-        if data["resultCount"] > 0:
-            # Reescalalo
-            imagen_url = data["results"][0]["artworkUrl100"]
-            return imagen_url.replace("100x100bb", "600x600bb")
-    except Exception as e:
-        print(f"Error buscando carátula: {e}")
-    
-    # Imagen por defecto si no encuentra nada la api penca de itunes
-    return "https://cdn-icons-png.flaticon.com/512/8660/8660552.png"
+        for item in datos['carrito']:
+            tag = "(NFC)" if item['nfc'] else "(Normal)"
+            items_str.append(f"{item['nombre']} {tag}")
+            if item['nfc']: tiene_nfc_global = "Si/Mixto"
 
-def conectar_google_sheets():
-    scopes = [
-        "https://www.googleapis.com/auth/spreadsheets",
-        "https://www.googleapis.com/auth/drive"
-    ]
-    try:
-        with open("credentials.json", "r") as f:
-            creds_dict = json.load(f)
-        if "private_key" in creds_dict:
-            creds_dict["private_key"] = creds_dict["private_key"].replace("\\n", "\n")
+        str_final_producto = " || ".join(items_str)
+
+        scopes = ["https://www.googleapis.com/auth/spreadsheets", "https://www.googleapis.com/auth/drive"]
+        creds_dict = json.load(open("credentials.json"))
+        if "private_key" in creds_dict: creds_dict["private_key"] = creds_dict["private_key"].replace("\\n", "\n")
         creds = Credentials.from_service_account_info(creds_dict, scopes=scopes)
         client = gspread.authorize(creds)
         sheet = client.open_by_key(SHEET_ID).worksheet("Ventas")
-        return sheet
-        
-    except FileNotFoundError:
-        print("ERROR: No encuentro el archivo credentials.json")
-        raise
-    except Exception as e:
-        print(f"ERROR CONECTANDO A SHEETS: {e}")
-        raise
 
-def obtener_catalogo():
-    return [
-        {"Producto": "Llavero Mini CD", "Precio": 4000},
-        {"Producto": "Llavero Mini CD con NFC", "Precio": 5000}
-    ]
-
-def registrar_venta_en_excel(datos):
-    print(f"📤 Conectando a Excel para guardar: {datos['diseno']}...") 
-    try:
-        sheet = conectar_google_sheets() 
-        fecha_actual = datetime.datetime.now().strftime("%d/%m/%Y")
-        tiene_nfc = "Sí" if "nfc" in str(datos['tipo']).lower() else "No"
-        cadena_extra = "Ninguna" 
-        
-        #Plantilla para el Mapeo de columnas en GOOGLE SHEETS empresas futuras 👹👹:
         nueva_fila = [
-            fecha_actual,       # A: Fecha
-            datos['diseno'],    # B: Diseño
-            tiene_nfc,          # C: NFC
-            cadena_extra,       # D: Cadena
-            datos['cantidad'],  # E: Cantidad
-            datos['precio'],    # F: Precio Unit
-            datos['total'],     # G: Total
-            datos.get('telefono', '-'),  # H: Teléfono
-            datos.get('email', '-'),     # I: Email
-            datos.get('direccion', '-'), # J: Dirección
-            "Transferencia",    # K: Método
-            "Pagado",           # L: Estado Pago
-            "Pendiente",        # M: Estado Prod
-            "Pendiente",        # N: Estado Entrega
-            datos['cliente']    # O: Nombre Cliente
+            datetime.datetime.now().strftime("%d/%m/%Y"), 
+            limpiar_texto(str_final_producto),            
+            tiene_nfc_global,                             
+            datos['order_id'],                            
+            len(datos['carrito']),                        
+            "Variado",                                    
+            datos['total'],                               
+            datos.get('telefono', '-'),
+            datos.get('email', '-'),
+            datos.get('direccion', '-'),
+            "Transferencia",
+            "Pagado",
+            "En Producción",
+            "Pendiente",
+            datos['cliente']
         ]
-        
         sheet.append_row(nueva_fila)
-        print("✅ ¡Venta guardada y stock descontado!")
         return True
-    
     except Exception as e:
-        print(f"Error crítico guardando en Excel: {e}")
+        print(f"Error crítico Excel: {e}")
         return False
 
-def pensar_respuesta(mensaje, catalogo):
-    catalogo_str = json.dumps(catalogo, ensure_ascii=False)
+# ==========================================
+# LÓGICA BOT
+# ==========================================
 
-    prompt = f"""
-    Eres VinlumeBot.
-    CATÁLOGO: {catalogo_str}
-    OBJETIVO: Vender Llaveros Mini CD a toda costa se ordenado y usa emojis para un mejor feedback ($4000) o con NFC ($5000).
-    SI EL CLIENTE QUIERE COMPRAR, RESPONDE SOLO UN JSON (sin texto extra):
+def get_cancel_button():
+    return InlineKeyboardButton("❌ Cancelar / Reiniciar", callback_data='cancel_order')
 
-    {{
-      "accion": "VENTA",
-      "tipo_exacto": "Llavero Mini CD" o "Llavero Mini CD con NFC",
-      "diseno_cliente": "Artista - Album",
-      "cantidad": 1
-    }}
-    
-    SI SOLO PREGUNTA, responde amable y corto como vendedor.
-    CLIENTE: "{mensaje}"
-    """
-    
-    for intento in range(2):
-        try:
-            response = model.generate_content(prompt)
-            texto_limpio = response.text.strip().replace("```json", "").replace("```", "")
-            return texto_limpio
-        except Exception as e:
-            print(f"Error IA: {e}")
-            time.sleep(2)   
-    return "Estoy pensando... dame un momento porfavor."
+def get_back_button():
+    return InlineKeyboardButton("🔙 Volver al Inicio", callback_data='back_start')
 
-pedidos_pendientes = {}
+async def reiniciar_sesion(chat_id, context):
+    if chat_id in sesiones: del sesiones[chat_id]
+    await context.bot.send_message(chat_id, "🔄 Operación reiniciada.", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("💿 Iniciar Nuevo Pedido", callback_data='start_bot')]]))
+
+
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await context.bot.send_message(update.effective_chat.id, "¡Hola! 💿 Bienvenido a Vinlume Disk\nTienda chilena de llaveros mini CD personalizados\n▶️ ¿Qué álbum quieres en tu llavero?\n▶️ ¿Deseas Informacion?estoy a la espera de tu respuesta. 😊")
+    user = update.effective_user
+    kb = [
+        [InlineKeyboardButton("🤖 Hacer Pedido", callback_data='start_bot')],
+        [InlineKeyboardButton("👤 Hablar con Humano", callback_data='start_human')],
+        [InlineKeyboardButton("❓ Info, Precios y Dudas", callback_data='start_info')]
+    ]
+    await context.bot.send_message(
+        update.effective_chat.id,
+        f"💿 VINLUME DISK Chile 💿\n\nHola {user.first_name}. Bienvenido a nuestra tienda de llaveros personalizados.\nSelecciona una opción 👀:",
+        reply_markup=InlineKeyboardMarkup(kb)
+    )
 
-async def manejar_mensaje(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_text = update.message.text
-    chat_id = update.effective_chat.id
+async def preguntar_cantidad(chat_id, context):
+    sesiones[chat_id]['paso'] = 'esperando_cantidad'
+    kb = [
+        [InlineKeyboardButton("1 Unidad 💿", callback_data='cant_1'), InlineKeyboardButton("2 Unidades 💿", callback_data='cant_2')],
+        [InlineKeyboardButton("3 Unidades 💿", callback_data='cant_3'), InlineKeyboardButton("4 Unidades 💿", callback_data='cant_4')],
+        [InlineKeyboardButton("Más de 4 (Escribir)", callback_data='cant_manual')],
+        [get_back_button()] # boton Volver al inicio
+    ]
+    await context.bot.send_message(chat_id, "💿 Paso 1:\n\n¡Genial! Empecemos. ¿Cuántos llaveros deseas pedir?", reply_markup=InlineKeyboardMarkup(kb))
+
+async def pedir_lista_albumes(chat_id, context):
+    cant = sesiones[chat_id]['cantidad_meta']
+    sesiones[chat_id]['paso'] = 'esperando_nombres'
     
-    # captura de datos del cliente /esto es fase beta/
-    # Si el cliente está en medio de un pedido mando foto
-    if chat_id in pedidos_pendientes:
-        p = pedidos_pendientes[chat_id]
-        paso = p.get('paso')
-        
-        if paso == 'esperando_telefono':
-            p['telefono'] = user_text
-            p['paso'] = 'esperando_email'
-            await context.bot.send_message(chat_id, "📧 Gracias. Ahora, \n¿cuál es tu email para enviarte la boleta? 😊")
-            return
-
-        elif paso == 'esperando_email':
-            p['email'] = user_text
-            p['paso'] = 'esperando_direccion'
-            await context.bot.send_message(chat_id, "🚚 Último dato: \n¿Cuál es tu dirección de envío/entrega? 📤")
-            return
-            #se supone que esto va al admin de forma exclusiva. hacer mas tests
-        elif paso == 'esperando_direccion':
-            p['direccion'] = user_text
-            caption = (f"🚨 NUEVO PEDIDO COMPLETO\n"
-                       f"👤 {p['cliente']}\n"
-                       f"💿 {p['detalle_txt']}\n"
-                       f"💰 ${p['total']}\n"
-                       f"📞 {p['telefono']}\n"
-                       f"📧 {p['email']}\n"
-                       f"🚚 {p['direccion']}")
-            
-            kb = [
-                [InlineKeyboardButton("✅ APROBAR", callback_data=f"ok|{chat_id}")],
-                [InlineKeyboardButton("❌ RECHAZAR", callback_data=f"no|{chat_id}")],
-                [InlineKeyboardButton("⚠️ DIFERENCIA $$", callback_data=f"dif|{chat_id}")]
-            ]
-            
-            await context.bot.send_photo(ADMIN_ID, p['foto_id'], caption=caption, reply_markup=InlineKeyboardMarkup(kb))
-            await context.bot.send_message(chat_id, "📩 Datos recibidos 👀. Esperando validación de 💿 VinlumeDisk...")
-            del p['paso'] 
-            return
-        
-    # ------------------------------------------
-
-    catalogo = obtener_catalogo()
-    respuesta = pensar_respuesta(user_text, catalogo)
-    
-    if "accion" in respuesta and "VENTA" in respuesta:
-        try:
-            datos = json.loads(respuesta)
-            tipo = datos.get("tipo_exacto", "Llavero Mini CD")
-            diseno = datos.get("diseno_cliente", "Diseño Pendiente")
-            cantidad = int(datos.get("cantidad", 1))
-            
-            precio = 4000
-            for item in catalogo:
-                if str(item['Producto']).lower() == str(tipo).lower():
-                    precio = int(item['Precio'])    
-            total = precio * cantidad
-            
-            pedidos_pendientes[chat_id] = {
-                "cliente": update.effective_user.first_name,
-                "diseno": diseno,
-                "tipo": tipo,
-                "cantidad": cantidad, 
-                "precio": precio, 
-                "total": total,
-                "detalle_txt": f"{diseno} ({tipo})",
-                "paso": "esperando_foto"
-            }
-            
-            await context.bot.send_message(chat_id, f"==============================\n\n✅ Pedido: {diseno}\n💿 Tipo: {tipo}\n💰 Total: ${total}\n\n==============================\nDATOS DE PAGO \n============================== JACK MAURO CARDENAS GARCIA\n RUT: 21774312-5\n BANCO: Banco Estado\n CUENTA: CuentaRUT\n NRO CUENTA: 21774312\n\n📸 Por favor, envía el comprobante de pago en este chat 👀.")
-        except Exception as e:
-            print(f"Error parseando JSON: {e}")
-            await context.bot.send_message(chat_id, "Entendí que quieres comprar, pero no capté bien el diseño \n (se claro/clara respecto al artista y su respectivo album para que su produccion sea mas rapida). \n ¿Podrías repetirlo?")
+    msg = f"💿 Paso 2:\n\nEntendido, será/n {cant} llavero/s.\n📀📀📀"
+    if cant == 1:
+        msg += "Por favor, escribe el nombre del Artista y del Álbum:\n \nEjemplo: Twenty One Pilots - Trench"
     else:
-        await context.bot.send_message(chat_id, respuesta)
+        msg += f"Por favor, escribe la lista de los {cant} álbumes (uno por línea o separados por comas).\n\nEjemplo:\nBad Bunny - Un Verano Sin ti\nLinkin Park - Meteora"
+    
+    #boton de cancelar
+    kb = [[get_cancel_button()]]
+    
+    await context.bot.send_message(chat_id, msg, reply_markup=InlineKeyboardMarkup(kb))
 
+async def mostrar_configurador_nfc(chat_id, context):
+    ses = sesiones[chat_id]
+    ses['paso'] = 'configurando_nfc'
+    
+    texto_base = "📲 Paso 3: Tecnología NFC\n\nAquí puedes activar el chip inteligente para cada llavero. Toca el botón del álbum para activarlo/desactivarlo.\n\n"
+    
+    keyboard = []
+    total_precio = 0
+    
+    for idx, item in enumerate(ses['carrito']):
+        estado = "✅ CON NFC" if item['nfc'] else "💿 Normal"
+        precio_item = 5000 if item['nfc'] else 4000
+        total_precio += precio_item
+        
+        texto_base += f"• {item['nombre']} → {estado}\n"
+        
+        btn_text = f"{idx+1}. {item['nombre'][:15]}... ({'NFC' if item['nfc'] else 'No'})"
+        keyboard.append([InlineKeyboardButton(btn_text, callback_data=f"toggle_{idx}")])
+
+    ses['total_temporal'] = total_precio
+    texto_base += f"\n💰 Total Actual: ${total_precio}"
+    
+    # Botones extra de ayuda y control
+    keyboard.append([InlineKeyboardButton("🤔 ¿Qué es el NFC?", callback_data="what_is_nfc")])
+    keyboard.append([InlineKeyboardButton("✅ Confirmar y Seguir", callback_data="confirm_nfc")])
+    keyboard.append([get_cancel_button()])
+    
+    await context.bot.send_message(chat_id, texto_base, reply_markup=InlineKeyboardMarkup(keyboard))
+
+async def confirmar_datos(chat_id, context):
+    s = sesiones[chat_id]
+    msg = (f"📋 CONFIRMA TUS DATOS\n\n"
+           f"Por favor revisa que todo esté correcto para el envío 👀:\n\n"
+           f"📞 {s.get('telefono')}\n"
+           f"📧 {s.get('email')}\n"
+           f"🚚 {s.get('direccion')}\n\n"
+           f"¿Están bien los datos? \n 👇👇👇")
+    
+    kb = [
+        [InlineKeyboardButton("✅ Sí, todo perfecto", callback_data='datos_ok')],
+        [InlineKeyboardButton("✏️ Corregir Teléfono", callback_data='fix_telefono')],
+        [InlineKeyboardButton("✏️ Corregir Email", callback_data='fix_email')],
+        [InlineKeyboardButton("✏️ Corregir Dirección", callback_data='fix_direccion')],
+        [get_cancel_button()]
+    ]
+    await context.bot.send_message(chat_id, msg, reply_markup=InlineKeyboardMarkup(kb))
+
+async def manejar_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query
+    await q.answer()
+    chat_id = update.effective_chat.id
+    data = q.data
+    if data == 'cancel_order':
+        await reiniciar_sesion(chat_id, context)
+        return
+    elif data == 'back_start':
+        await start(update, context)
+        return
+    elif data == 'what_is_nfc':
+        kb = [[InlineKeyboardButton("🔙 Volver al Inicio", callback_data='back_start')]]
+        await context.bot.send_message(chat_id, "📲 **¿Qué es NFC?**\n\nEs un chip invisible dentro del llavero. \nAl acercar tu celular, se abre automáticamente el álbum en Spotify, YouTube o el link que tú quieras. ¡Sin usar la cámara, solo por contacto! ✨", reply_markup=InlineKeyboardMarkup(kb))
+        return
+    elif data == 'start_human':
+        kb = [[InlineKeyboardButton("🔙 Volver al Inicio", callback_data='back_start')]]
+        await context.bot.send_message(chat_id, f"👤 **Contacto Directo**\n\nPara pedidos mayoristas (+20 unidades), diseños complejos o dudas específicas, escríbenos directo:\n\n👉 {LINK_INSTAGRAM}", reply_markup=InlineKeyboardMarkup(kb))  
+    elif data == 'start_info':
+        msj = ("ℹ️ INFORMACIÓN Y PRECIOS\n\n"
+               "• Normal ($4.000): Llavero con la portada en alta calidad.\n"
+               "• Con NFC ($5.000): Incluye chip inteligente para escanear con el celular.\n\n"
+               "🚚 Enviamos a todo Chile 📤.\n\n"
+               "💡 ¿Tienes dudas? Puedes escribirme tu pregunta aquí mismo y te responderé. O si estás listo, toca abajo:")
+        
+        kb = [
+            [InlineKeyboardButton("💿 Hacer Pedido", callback_data='start_bot')],
+            [InlineKeyboardButton("🤔 ¿Qué es NFC?", callback_data='what_is_nfc')],
+            [InlineKeyboardButton("🔙 Volver al Inicio", callback_data='back_start')]
+        ]
+        await context.bot.send_message(chat_id, msj, reply_markup=InlineKeyboardMarkup(kb))
+    
+    elif data == 'start_bot':
+        sesiones[chat_id] = {'cliente': update.effective_user.first_name, 'carrito': []}
+        await preguntar_cantidad(chat_id, context)
+
+    elif data.startswith('cant_'):
+        if data == 'cant_manual':
+            sesiones[chat_id]['paso'] = 'esperando_cantidad_manual'
+            await context.bot.send_message(chat_id, "⌨️ Por favor, escribe el número de unidades (Máximo 20 por aquí):")
+        else:
+            cant = int(data.split('_')[1])
+            sesiones[chat_id]['cantidad_meta'] = cant
+            await pedir_lista_albumes(chat_id, context)
+
+    elif data == 'cover_si':
+        await mostrar_configurador_nfc(chat_id, context)
+    
+    elif data == 'cover_manual':
+        sesiones[chat_id]['url_portada'] = "MANUAL"
+        sesiones[chat_id]['paso'] = 'esperando_foto'
+        await context.bot.send_message(chat_id, "📸 ¡Vale! Envíame la imagen que quieres usar.")
+
+    elif data.startswith('toggle_'):
+        idx = int(data.split('_')[1])
+        item = sesiones[chat_id]['carrito'][idx]
+        item['nfc'] = not item['nfc']
+        await q.message.delete()
+        await mostrar_configurador_nfc(chat_id, context)
+
+    elif data == 'confirm_nfc':
+        sesiones[chat_id]['paso'] = 'esperando_telefono'
+        await context.bot.send_message(chat_id, "📝 ¡Perfecto! Vamos con tus datos de envío.\n\n📞 ¿Cuál es tu número de teléfono?")
+
+    elif data.startswith('fix_'):
+        campo = data.split('_')[1]
+        sesiones[chat_id]['paso'] = f'esperando_{campo}'
+        await context.bot.send_message(chat_id, f"✏️ Escribe tu nuevo {campo}:")
+
+    elif data == 'datos_ok':
+        s = sesiones[chat_id]
+        s['paso'] = 'esperando_pago'
+        msj = (f"💳 RESUMEN FINAL\n==================================================\n"
+               f"💵 Total a pagar: ${s['total_temporal']}\n\n"
+               f"🏦 Datos de Transferencia:\n"
+               f"• Banco: Banco Estado\nCuenta: CuentaRUT\n"
+               f"• Nombre: JACK MAURO CARDENAS GARCIA\n"
+               f"• Rut: 21221234-5\n\n==================================================\n\n"
+               f"📸 Por favor, envía aquí tu comprobante de pago.\n (📸 Como Imagen)")
+        await context.bot.send_message(chat_id, msj)
+
+    elif "|" in data:
+        accion, id_cliente = data.split("|")
+        id_cliente = int(id_cliente)
+        
+        if id_cliente not in sesiones:
+            await q.edit_message_caption("⚠️ Esta sesión ha expirado.")
+            return
+        
+        s = sesiones[id_cliente]
+        if accion == "aprob":
+            s['order_id'] = f"VD-{random.randint(10000, 99999)}"
+            s['total'] = s['total_temporal']
+            
+            if registrar_venta_en_excel(s):
+                if '@' in str(s.get('email')): enviar_correo_confirmacion(s['email'], s)
+                
+                msj_exito = (f"🎉 ¡Pago Aprobado!\n\n"
+                             f"👍 Tu código de seguimiento es: #{s['order_id']}\nGuardalo bien para cualquier consulta futura.\n\n"
+                             f"Tu pedido ya pasó a producción .\n\n"
+                             f"Para pedir nuevamente, toca aquí: /start \n\n"
+                             f" ahora estamos a tu servicio. Cualquier duda, contáctanos en:\n{LINK_INSTAGRAM}")
+                
+                await context.bot.send_message(id_cliente, msj_exito)
+                await q.edit_message_caption(f"{q.message.caption}\n\n✅ APROBADO #{s['order_id']}")
+            else:
+                await q.edit_message_caption("⚠️ ERROR CRÍTICO EN BASE DE DATOS")
+            
+            del sesiones[id_cliente]
+
+        elif accion == "rech":
+            msj_rechazo = (f"❌ Tu pago no pudo ser verificado.\n\n"
+                           f"Para más información y dudas hablar por interno a:\n{LINK_INSTAGRAM}")
+            await context.bot.send_message(id_cliente, msj_rechazo)
+            await q.edit_message_caption("🚫 RECHAZADO")
+            del sesiones[id_cliente]
+
+async def manejar_texto(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    chat_id = update.effective_chat.id
+    text = update.message.text
+    
+    if chat_id not in sesiones:
+        prompt = f"Eres el asistente de Vinlume Disk (tienda de llaveros CD). Cliente dice: '{text}'. Si quiere comprar un album responde COMPRA:Album. Si tiene dudas responde CHAT:RespuestaAmable"
+        try:
+            resp = model.generate_content(prompt).text
+            if "COMPRA:" in resp:
+                album = resp.split(":")[1].strip()
+                sesiones[chat_id] = {'cliente': update.effective_user.first_name, 'carrito': [], 'cantidad_meta': 1}
+                url = buscar_portada_album(album)
+                sesiones[chat_id]['carrito'].append({'nombre': album, 'nfc': False}) 
+                if url:
+                    sesiones[chat_id]['url_portada'] = url
+                    kb = [[InlineKeyboardButton("✅ Sí, es ese", callback_data='cover_si'), InlineKeyboardButton("🖼️ No (Subir mía)", callback_data='cover_manual')]]
+                    await context.bot.send_photo(chat_id, url, caption=f"💿 Busqué: {album}\n¿Es correcta esta portada?", reply_markup=InlineKeyboardMarkup(kb))
+                else:
+                    await mostrar_configurador_nfc(chat_id, context)
+            else:
+                await context.bot.send_message(chat_id, resp.replace("CHAT:", ""), reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("💿 Hacer Pedido", callback_data='start_bot')]]))
+        except:
+            await context.bot.send_message(chat_id, "Hola, usa el menú para comenzar tu pedido.", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("Ver Menú", callback_data='start_bot')]]))
+        return
+    
+    paso = sesiones[chat_id].get('paso')
+
+    if paso == 'esperando_cantidad_manual':
+        if text.isdigit():
+            cant = int(text)
+            if cant > MAX_PEDIDO_AUTOMATICO:
+                kb = [[InlineKeyboardButton("🔙 Volver al Inicio", callback_data='back_start')]]
+                await context.bot.send_message(chat_id, f"⚠️ ¡Wow! Para pedidos de {cant} unidades (Mayoristas), por favor contáctanos directamente por Instagram para coordinar stock y precios especiales.\n\n👉 {LINK_INSTAGRAM}", reply_markup=InlineKeyboardMarkup(kb))
+                del sesiones[chat_id] 
+            elif cant > 0:
+                sesiones[chat_id]['cantidad_meta'] = cant
+                await pedir_lista_albumes(chat_id, context)
+            else:
+                await context.bot.send_message(chat_id, "⚠️ El número debe ser mayor a 0.")
+        else:
+            await context.bot.send_message(chat_id, "⚠️ Por favor, ingresa solo números.")
+
+    elif paso == 'esperando_nombres':
+        meta = sesiones[chat_id]['cantidad_meta']
+        if "\n" in text:
+            items = [x.strip() for x in text.split("\n") if x.strip()]
+        else:
+            items = [x.strip() for x in text.split(",") if x.strip()]
+        
+        if len(items) != meta:
+            await context.bot.send_message(chat_id, f"⚠️ Pediste {meta} unidades, pero escribiste {len(items)} nombres.\nPor favor revisa la lista y envíala de nuevo.")
+            return
+        
+        sesiones[chat_id]['carrito'] = [{'nombre': item, 'nfc': False} for item in items]
+        
+        if meta == 1:
+            url = buscar_portada_album(items[0])
+            if url:
+                sesiones[chat_id]['url_portada'] = url
+                kb = [[InlineKeyboardButton("✅ Sí, es ese", callback_data='cover_si'), InlineKeyboardButton("🖼️ No (Subir mía)", callback_data='cover_manual')]]
+                await context.bot.send_photo(chat_id, url, caption=f"💿 Busqué: {items[0]}\n¿Es correcta esta portada?", reply_markup=InlineKeyboardMarkup(kb))
+                return
+        
+        await mostrar_configurador_nfc(chat_id, context)
+    
+    elif paso == 'esperando_telefono':
+        sesiones[chat_id]['telefono'] = text
+        if 'email' in sesiones[chat_id]: await confirmar_datos(chat_id, context)
+        else:
+            sesiones[chat_id]['paso'] = 'esperando_email'
+            await context.bot.send_message(chat_id, "📧 ¿Cuál es tu Email?")
+
+    elif paso == 'esperando_email':
+        sesiones[chat_id]['email'] = text
+        if 'direccion' in sesiones[chat_id]: await confirmar_datos(chat_id, context)
+        else:
+            sesiones[chat_id]['paso'] = 'esperando_direccion'
+            await context.bot.send_message(chat_id, "🚚 ¿Cuál es tu dirección de envío?")
+
+    elif paso == 'esperando_direccion':
+        sesiones[chat_id]['direccion'] = text
+        await confirmar_datos(chat_id, context)
 
 async def manejar_foto(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
+    if chat_id not in sesiones: return
     
-    if chat_id in pedidos_pendientes and pedidos_pendientes[chat_id].get('paso') == 'esperando_foto':
-        pedidos_pendientes[chat_id]['foto_id'] = update.message.photo[-1].file_id
-        pedidos_pendientes[chat_id]['paso'] = 'esperando_telefono'
-        
-        await context.bot.send_message(chat_id, "✅✅ Comprobante recibido. \n📞 Para gestionar el envío, necesito tu número de teléfono:\nEjemplo: +56912345678")
-    else:
-        await context.bot.send_message(chat_id, "No tengo un pedido activo tuyo. Porfavor dime primero qué quieres comprar 😊.")
+    paso = sesiones[chat_id].get('paso')
+    fid = update.message.photo[-1].file_id
 
-async def decision_admin(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    q = update.callback_query
-    await q.answer()
-    data = q.data.split("|")
-    accion = data[0]
-    chat_cliente = int(data[1])
-    
-    if chat_cliente in pedidos_pendientes:
-        p = pedidos_pendientes[chat_cliente]
+    if paso == 'esperando_foto':
+        sesiones[chat_id]['file_id_portada'] = fid
+        await mostrar_configurador_nfc(chat_id, context)
+
+    elif paso == 'esperando_pago':
+        s = sesiones[chat_id]
+        txt_admin = f"🚨 NUEVA ORDEN (${s['total_temporal']})\n👤 {s['cliente']}\n"
+        for i in s['carrito']:
+            txt_admin += f"- {i['nombre']} ({'NFC' if i['nfc'] else 'No'})\n"
         
-        if accion == "ok":
-            exito = registrar_venta_en_excel(p)
+        kb = [[InlineKeyboardButton("✅ APROBAR", callback_data=f"aprob|{chat_id}")],
+              [InlineKeyboardButton("❌ RECHAZAR", callback_data=f"rech|{chat_id}")]]
+        
+        if s.get('file_id_portada'):
+            await context.bot.send_photo(ADMIN_ID, s['file_id_portada'], caption="🎨 DISEÑO CLIENTE")
             
-            if exito:
-                # arreglar esta tonteria despues
-                if p.get('email') and '@' in p['email']:
-                    enviar_correo_confirmacion(p['email'], p)
-                else:
-                    print("⚠️ No se envió correo: Email inválido o no proporcionado.")
-
-                await context.bot.send_message(chat_cliente, "🎉 ¡Pago confirmado! 🎉 \nTu pedido pasara a producción y se te informara su avance. \n📧 Se te ha enviado un comprobante a tu correo.")
-                await q.edit_message_caption(caption=f"{q.message.caption}\n\n✅ GUARDADO Y CONFIRMADO ")
-            else:
-                await q.edit_message_caption(caption=f"{q.message.caption}\n\n⚠️ ERROR DE CONEXIÓN A LA BBDD")
-        elif accion == "no":
-            await context.bot.send_message(chat_cliente, "❌ Tu pago no pudo ser verificado. Por favor, intenta nuevamente o contáctanos en:\n\n📷Instagram: https://www.instagram.com/vinlume_disk?igsh=MTNvOXk1ZHp2Nm1xbw==\n✉️Correo: vinlume.disk@gmail.com")
-            await q.edit_message_caption(caption="🚫 PAGO RECHAZADO POR LOS ADMINISTRADORES")
-        elif accion == "dif":
-            await context.bot.send_message(chat_cliente, "⚠️ El monto transferido es incorrecto. Por favor transfiere la diferencia y envía el comprobante aquí.")
-            await q.edit_message_caption(caption=f"{q.message.caption}\n\n💸 SOLICITANDO DIFERENCIA")
-        if accion in ["ok", "no"]:
-            del pedidos_pendientes[chat_cliente]
-    else:
-        await q.edit_message_caption(caption="⚠️ Este pedido ya expiró o ya fue procesado.")
+        await context.bot.send_photo(ADMIN_ID, fid, caption=txt_admin, reply_markup=InlineKeyboardMarkup(kb))
+        await context.bot.send_message(chat_id, "📩 ¡Recibido! Estamos verificando tu comprobante.")
 
 if __name__ == '__main__':
     mostrar_banner()
     app = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
-    
     app.add_handler(CommandHandler('start', start))
-    app.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), manejar_mensaje))
+    app.add_handler(CallbackQueryHandler(manejar_callback))
+    app.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), manejar_texto))
     app.add_handler(MessageHandler(filters.PHOTO, manejar_foto))
-    app.add_handler(CallbackQueryHandler(decision_admin))
-    
     app.run_polling()

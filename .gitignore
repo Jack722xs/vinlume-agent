@@ -8,4 +8,4 @@ env/
 credentials.json
 token.json
 .vscode/
-*.log
+*.loga
