@@ -8,11 +8,11 @@ MSG_PASO_1 = "💿 Paso 1:\n\n¡Genial! Empecemos. ¿Cuántos llaveros deseas pe
 MSG_PASO_2_SINGLE = "Por favor, escribe el nombre del Artista y del Álbum:\n \nEjemplo: Twenty One Pilots - Trench"
 MSG_PASO_2_MULTI = "Por favor, escribe la lista de los {cant} álbumes (uno por línea o separados por comas).\n\nEjemplo:\nBad Bunny - Un Verano Sin ti\nLinkin Park - Meteora"
 
-MSG_INFO_NFC = "📲 Paso 3: Tecnología NFC\n\nAquí puedes activar el chip inteligente para cada llavero. Toca el botón del álbum para activarlo/desactivarlo.\n\n"
+MSG_INFO_NFC = "📲 Paso 3: Tecnología NFC\n\nAquí puedes activar el chip inteligente para cada llavero. Toca el botón del álbum para activarlo/desactivarlo.\n llavero NORMAL= $4000\n llavero Con NFC= $5000\n\n"
 
 MSG_QUE_ES_NFC = "📲 ¿Qué es NFC?\n\nEs un chip invisible dentro del llavero. \nAl acercar tu celular, se abre automáticamente el álbum en Spotify, YouTube o el link que tú quieras. ¡Sin usar la cámara, solo por contacto! ✨"
 
-MSG_CONTACTO_HUMANO = f"👤 **Contacto Directo**\n\nPara pedidos mayoristas (+20 unidades), diseños complejos o dudas específicas, escríbenos directo:\n\n👉 {LINK_INSTAGRAM}"
+MSG_CONTACTO_HUMANO = f"👤 Contacto Directo\n\nPara pedidos mayoristas (+20 unidades), diseños complejos o dudas específicas, escríbenos directo:\n\n👉 {LINK_INSTAGRAM}"
 
 MSG_INFO_GENERAL = ("ℹ️ INFORMACIÓN Y PRECIOS\n\n"
                "• Normal ($4.000): Llavero con la portada en alta calidad.\n"
@@ -42,4 +42,4 @@ MSG_PAGO_APROBADO = ("🎉 ¡Pago Aprobado!\n\n"
                              f" ahora estamos a tu servicio. Cualquier duda, contáctanos en:\n{LINK_INSTAGRAM}")
 
 MSG_PAGO_RECHAZADO = (f"❌ Tu pago no pudo ser verificado.\n\n"
-                           f"Para más información y dudas hablar por interno a:\n{LINK_INSTAGRAM}")
+                           f"Para más información y dudas hablar por interno a:\n{LINK_INSTAGRAM}\n\n para iniciar un nuevo pedido, toca aquí: /start")

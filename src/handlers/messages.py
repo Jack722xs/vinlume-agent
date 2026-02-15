@@ -10,7 +10,6 @@ from src.services.itunes import buscar_portada_album
 from src.services.email import enviar_correo_confirmacion
 from src.services.sheets import registrar_venta_en_excel
 
-
 genai.configure(api_key=GOOGLE_API_KEY)
 model = genai.GenerativeModel('models/gemini-2.5-flash-preview-09-2025')
 
@@ -36,7 +35,7 @@ async def pedir_lista_albumes(chat_id, context):
     cant = sesiones[chat_id]['cantidad_meta']
     sesiones[chat_id]['paso'] = 'esperando_nombres'
     
-    msg = f"💿 Paso 2:\n\nEntendido, será/n {cant} llavero/s.\n📀📀📀"
+    msg = f"💿 Paso 2:\n\nEntendido, será/n {cant} llavero/s.\n"
     if cant == 1:
         msg += txt.MSG_PASO_2_SINGLE
     else:
@@ -49,14 +48,12 @@ async def mostrar_configurador_nfc(chat_id, context):
     ses['paso'] = 'configurando_nfc'
     
     texto_base = txt.MSG_INFO_NFC
-    
     total_precio = 0
     
     for idx, item in enumerate(ses['carrito']):
         estado = "✅ CON NFC" if item['nfc'] else "💿 Normal"
         precio_item = 5000 if item['nfc'] else 4000
         total_precio += precio_item
-        
         texto_base += f"• {item['nombre']} → {estado}\n"
 
     ses['total_temporal'] = total_precio
@@ -67,7 +64,6 @@ async def mostrar_configurador_nfc(chat_id, context):
 async def confirmar_datos(chat_id, context):
     s = sesiones[chat_id]
     msg = txt.MSG_CONFIRMACION_DATOS.format(telefono=s.get('telefono'), email=s.get('email'), direccion=s.get('direccion'))
-    
     await context.bot.send_message(chat_id, msg, reply_markup=kb.kb_confirmar_datos())
 
 async def manejar_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -120,7 +116,7 @@ async def manejar_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     elif data == 'confirm_nfc':
         sesiones[chat_id]['paso'] = 'esperando_telefono'
-        await context.bot.send_message(chat_id, "📝 ¡Perfecto! Vamos con tus datos de envío.\n\n📞 ¿Cuál es tu número de teléfono?")
+        await context.bot.send_message(chat_id, "📝 ¡Perfecto! Vamos con tus datos de envío.\n\n📞 ¿Cuál es tu número de teléfono?\n(Ejemplo: +569 912345678)")
 
     elif data.startswith('fix_'):
         campo = data.split('_')[1]
@@ -148,14 +144,11 @@ async def manejar_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             
             if registrar_venta_en_excel(s):
                 if '@' in str(s.get('email')): enviar_correo_confirmacion(s['email'], s)
-                
                 msj_exito = txt.MSG_PAGO_APROBADO.format(order_id=s['order_id'])
-                
                 await context.bot.send_message(id_cliente, msj_exito)
                 await q.edit_message_caption(f"{q.message.caption}\n\n✅ APROBADO #{s['order_id']}")
             else:
                 await q.edit_message_caption("⚠️ ERROR CRÍTICO EN BASE DE DATOS")
-            
             del sesiones[id_cliente]
 
         elif accion == "rech":
@@ -174,7 +167,9 @@ async def manejar_texto(update: Update, context: ContextTypes.DEFAULT_TYPE):
             if "COMPRA:" in resp:
                 album = resp.split(":")[1].strip()
                 sesiones[chat_id] = {'cliente': update.effective_user.first_name, 'carrito': [], 'cantidad_meta': 1}
-                url = buscar_portada_album(album)
+                
+                url = await buscar_portada_album(album)
+                
                 sesiones[chat_id]['carrito'].append({'nombre': album, 'nfc': False}) 
                 if url:
                     sesiones[chat_id]['url_portada'] = url
@@ -217,7 +212,7 @@ async def manejar_texto(update: Update, context: ContextTypes.DEFAULT_TYPE):
         sesiones[chat_id]['carrito'] = [{'nombre': item, 'nfc': False} for item in items]
         
         if meta == 1:
-            url = buscar_portada_album(items[0])
+            url = await buscar_portada_album(items[0])
             if url:
                 sesiones[chat_id]['url_portada'] = url
                 await context.bot.send_photo(chat_id, url, caption=f"💿 Busqué: {items[0]}\n¿Es correcta esta portada?", reply_markup=kb.kb_confirmar_portada())
@@ -230,14 +225,14 @@ async def manejar_texto(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if 'email' in sesiones[chat_id]: await confirmar_datos(chat_id, context)
         else:
             sesiones[chat_id]['paso'] = 'esperando_email'
-            await context.bot.send_message(chat_id, "📧 ¿Cuál es tu Email?")
+            await context.bot.send_message(chat_id, "📧 ¿Cuál es tu Email?\n(Ejemplo: jack@ejemplo.com)")
 
     elif paso == 'esperando_email':
         sesiones[chat_id]['email'] = text
         if 'direccion' in sesiones[chat_id]: await confirmar_datos(chat_id, context)
         else:
             sesiones[chat_id]['paso'] = 'esperando_direccion'
-            await context.bot.send_message(chat_id, "🚚 ¿Cuál es tu dirección de envío?")
+            await context.bot.send_message(chat_id, "🚚 ¿Cuál es tu dirección de envío?") #añadir sistema de gestion de pago de envios
 
     elif paso == 'esperando_direccion':
         sesiones[chat_id]['direccion'] = text

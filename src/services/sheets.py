@@ -1,15 +1,18 @@
 import json
 import datetime
 import gspread
+import logging
 from google.oauth2.service_account import Credentials
-from config import SHEET_ID
+from config import SHEET_ID, BASE_DIR
+
+logger = logging.getLogger(__name__)
 
 def limpiar_texto(texto):
     if not texto: return ""
     return str(texto)[:500].replace("\n", " | ").strip()
 
 def registrar_venta_en_excel(datos):
-    print(f"log Exportando pedido #{datos['order_id']}...") 
+    logger.info(f"Exportando pedido #{datos['order_id']}...") 
     try:
         items_str = []
         tiene_nfc_global = "No"
@@ -22,8 +25,13 @@ def registrar_venta_en_excel(datos):
         str_final_producto = " || ".join(items_str)
 
         scopes = ["https://www.googleapis.com/auth/spreadsheets", "https://www.googleapis.com/auth/drive"]
-        creds_dict = json.load(open("credentials.json"))
-        if "private_key" in creds_dict: creds_dict["private_key"] = creds_dict["private_key"].replace("\\n", "\n")
+        
+        ruta_credenciales = BASE_DIR / "credentials.json"
+        
+        creds_dict = json.load(open(ruta_credenciales))
+        if "private_key" in creds_dict: 
+            creds_dict["private_key"] = creds_dict["private_key"].replace("\\n", "\n")
+            
         creds = Credentials.from_service_account_info(creds_dict, scopes=scopes)
         client = gspread.authorize(creds)
         sheet = client.open_by_key(SHEET_ID).worksheet("Ventas")
@@ -48,5 +56,5 @@ def registrar_venta_en_excel(datos):
         sheet.append_row(nueva_fila)
         return True
     except Exception as e:
-        print(f"Error crítico Excel: {e}")
+        logger.error(f"Error crítico Excel: {e}")
         return False
