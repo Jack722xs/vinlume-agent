@@ -1,4 +1,5 @@
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup
+from config import PRECIOS_ENVIO
 
 def get_cancel_button():
     return InlineKeyboardButton("❌ Cancelar / Reiniciar", callback_data='cancel_order')
@@ -38,12 +39,23 @@ def kb_nfc_config(carrito, total_precio):
     keyboard.append([get_cancel_button()])
     return InlineKeyboardMarkup(keyboard)
 
+# --- NUEVO TECLADO DE REGIONES ---
+def kb_regiones():
+    keyboard = []
+    # Genera botones automáticamente desde config.py
+    for nombre_zona, precio in PRECIOS_ENVIO.items():
+        # El callback envía "region_NombreZona"
+        keyboard.append([InlineKeyboardButton(f"{nombre_zona} (${precio})", callback_data=f"region_{nombre_zona}")])
+    
+    keyboard.append([get_cancel_button()])
+    return InlineKeyboardMarkup(keyboard)
+
 def kb_confirmar_datos():
     return InlineKeyboardMarkup([
         [InlineKeyboardButton("✅ Sí, todo perfecto", callback_data='datos_ok')],
         [InlineKeyboardButton("✏️ Corregir Teléfono", callback_data='fix_telefono')],
         [InlineKeyboardButton("✏️ Corregir Email", callback_data='fix_email')],
-        [InlineKeyboardButton("✏️ Corregir Dirección", callback_data='fix_direccion')],
+        [InlineKeyboardButton("✏️ Cambiar Dirección/Zona", callback_data='fix_direccion')], # Actualizado
         [get_cancel_button()]
     ])
 
