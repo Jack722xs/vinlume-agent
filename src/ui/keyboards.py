@@ -39,25 +39,26 @@ def kb_nfc_config(carrito, total_precio):
     keyboard.append([get_cancel_button()])
     return InlineKeyboardMarkup(keyboard)
 
-# --- NUEVO TECLADO DE REGIONES ---
 def kb_regiones():
     keyboard = []
-    # Genera botones automáticamente desde config.py
     for nombre_zona, precio in PRECIOS_ENVIO.items():
-        # El callback envía "region_NombreZona"
         keyboard.append([InlineKeyboardButton(f"{nombre_zona} (${precio})", callback_data=f"region_{nombre_zona}")])
-    
     keyboard.append([get_cancel_button()])
     return InlineKeyboardMarkup(keyboard)
 
-def kb_confirmar_datos():
-    return InlineKeyboardMarkup([
-        [InlineKeyboardButton("✅ Sí, todo perfecto", callback_data='datos_ok')],
-        [InlineKeyboardButton("✏️ Corregir Teléfono", callback_data='fix_telefono')],
-        [InlineKeyboardButton("✏️ Corregir Email", callback_data='fix_email')],
-        [InlineKeyboardButton("✏️ Cambiar Dirección/Zona", callback_data='fix_direccion')], # Actualizado
-        [get_cancel_button()]
-    ])
+#botón de cupón
+def kb_confirmar_datos(ya_tiene_cupon=False):
+    botones = [
+        [InlineKeyboardButton("✅ Sí, Ir al Pago", callback_data='datos_ok')],
+    ]
+    if not ya_tiene_cupon:
+        botones.append([InlineKeyboardButton("🎟 Tengo un Cupón", callback_data='ingresar_cupon')])
+        
+    botones.append([InlineKeyboardButton("✏️ Corregir Teléfono", callback_data='fix_telefono')])
+    botones.append([InlineKeyboardButton("✏️ Corregir Email", callback_data='fix_email')])
+    botones.append([InlineKeyboardButton("✏️ Cambiar Dirección/Zona", callback_data='fix_direccion')])
+    botones.append([get_cancel_button()])
+    return InlineKeyboardMarkup(botones)
 
 def kb_volver_inicio():
     return InlineKeyboardMarkup([[get_back_button()]])

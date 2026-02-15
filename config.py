@@ -27,3 +27,9 @@ PRECIOS_ENVIO = {
     "Zona Sur": 6000,
     "Extremo Sur": 9000
 }
+CUPONES = {
+    "VINLUME10TG": 0.10,  # 10% de descuento
+    "CLIENTEPROTG": 0.15, # 15% de descuento
+    "ENVIOGRATISTG": "FREE_SHIP",
+    "CLAU100": "GOD_MODE", # Código especial para pedidos gratis (solo para testing, eliminar en producción)
+}

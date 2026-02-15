@@ -3,8 +3,7 @@ import google.generativeai as genai
 from telegram import Update
 from telegram.ext import ContextTypes
 
-# Importamos PRECIOS_ENVIO
-from config import GOOGLE_API_KEY, LINK_INSTAGRAM, MAX_PEDIDO_AUTOMATICO, ADMIN_IDS, PRECIOS_ENVIO
+from config import GOOGLE_API_KEY, LINK_INSTAGRAM, MAX_PEDIDO_AUTOMATICO, ADMIN_IDS, PRECIOS_ENVIO, CUPONES
 from src.ui import keyboards as kb
 from src.ui import strings as txt
 from src.services.itunes import buscar_portada_album
@@ -67,12 +66,35 @@ async def mostrar_configurador_nfc(chat_id, context):
 
 async def confirmar_datos(chat_id, context):
     s = context.user_data
-    
     costo_envio = s.get('precio_envio', 0)
-    subtotal = s.get('subtotal_productos', 0)
-    total_final = subtotal + costo_envio
+    subtotal_prod = s.get('subtotal_productos', 0)
+    descuento_aplicado = 0
+    total_final = subtotal_prod + costo_envio
     
-    s['total_temporal'] = total_final
+    cupon_activo = s.get('cupon_aplicado') 
+    
+    if cupon_activo:
+        valor_cupon = CUPONES.get(cupon_activo)
+        
+        if valor_cupon == "GOD_MODE":
+            descuento_aplicado = total_final # Descuenta todo
+            total_final = 0
+            msg_extra = "⚡️ Cupón DIOS: ¡TODO GRATIS!\n"
+            
+        elif valor_cupon == "FREE_SHIP":
+            descuento_aplicado = costo_envio
+            total_final = subtotal_prod 
+            msg_extra = "🎟 Cupón: Envío Gratis\n"
+            
+        elif isinstance(valor_cupon, float):
+            descuento_aplicado = int(subtotal_prod * valor_cupon)
+            total_final = (subtotal_prod - descuento_aplicado) + costo_envio
+            msg_extra = f"🎟 Cupón: -${descuento_aplicado}\n"
+    else:
+        msg_extra = ""
+
+    s['total_temporal'] = total_final 
+    s['descuento_valor'] = descuento_aplicado
 
     msg = txt.MSG_CONFIRMACION_DATOS.format(
         zona=s.get('zona_envio', 'No definida'),
@@ -80,10 +102,14 @@ async def confirmar_datos(chat_id, context):
         telefono=s.get('telefono'),
         email=s.get('email'),
         direccion=s.get('direccion'),
-        total_productos=subtotal,
+        total_productos=subtotal_prod,
         total_final=total_final
     )
-    await context.bot.send_message(chat_id, msg, reply_markup=kb.kb_confirmar_datos())
+    
+    if cupon_activo:
+        msg += f"\n✨ {msg_extra}"
+
+    await context.bot.send_message(chat_id, msg, reply_markup=kb.kb_confirmar_datos(ya_tiene_cupon=bool(cupon_activo)))
 
 async def manejar_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
@@ -143,10 +169,8 @@ async def manejar_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif data.startswith('region_'):
         zona_seleccionada = data.split('_')[1]
         precio = PRECIOS_ENVIO.get(zona_seleccionada, 0)
-        
         s['zona_envio'] = zona_seleccionada
         s['precio_envio'] = precio
-        
         s['paso'] = 'esperando_direccion'
         await context.bot.send_message(chat_id, f"✅ Zona: {zona_seleccionada} (${precio})\n\n🏠 Ahora escribe tu dirección exacta (Calle, Número, Comuna):")
 
@@ -159,9 +183,25 @@ async def manejar_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             s['paso'] = f'esperando_{campo}'
             await context.bot.send_message(chat_id, f"✏️ Escribe tu nuevo {campo}:")
 
+    elif data == 'ingresar_cupon':
+        s['paso'] = 'esperando_cupon'
+        await context.bot.send_message(chat_id, "🎟 Escribe tu código de descuento:")
+
     elif data == 'datos_ok':
         s['paso'] = 'esperando_pago'
-        msj = txt.MSG_RESUMEN_PAGO.format(total=s['total_temporal'])
+        
+        txt_descuento = ""
+        if s.get('cupon_aplicado'):
+            monto_desc = s.get('descuento_valor', 0)
+            txt_descuento = f"🎟 Descuento ({s['cupon_aplicado']}): -${monto_desc}\n"
+            
+        sub_real = s.get('subtotal_productos', 0) + s.get('precio_envio', 0)
+
+        msj = txt.MSG_RESUMEN_PAGO.format(
+            subtotal=sub_real,
+            texto_descuento=txt_descuento,
+            total=s['total_temporal']
+        )
         await context.bot.send_message(chat_id, msj)
 
     elif "|" in data:
@@ -224,7 +264,18 @@ async def manejar_texto(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     paso = s.get('paso')
 
-    if paso == 'esperando_cantidad_manual':
+    #VALIDACIÓN DE CUPÓN
+    if paso == 'esperando_cupon':
+        codigo = text.upper().strip() # Convertir a mayúsculas
+        if codigo in CUPONES:
+            s['cupon_aplicado'] = codigo
+            await context.bot.send_message(chat_id, f"🎉 ¡Genial! Cupón {codigo} aplicado correctamente.")
+            await confirmar_datos(chat_id, context)
+        else:
+            await context.bot.send_message(chat_id, "❌ Ese cupón no existe o expiró.\n¿Quieres intentar otro o seguir sin cupón?", 
+                                           reply_markup=kb.kb_confirmar_datos(ya_tiene_cupon=False))
+
+    elif paso == 'esperando_cantidad_manual':
         if text.isdigit():
             cant = int(text)
             if cant > MAX_PEDIDO_AUTOMATICO:
@@ -290,7 +341,8 @@ async def manejar_foto(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await mostrar_configurador_nfc(chat_id, context)
 
     elif paso == 'esperando_pago':
-        txt_admin = f"🚨 NUEVA ORDEN (${s['total_temporal']})\n👤 {s['cliente']}\n📍 {s.get('zona_envio', '-')}\n"
+        cupon_txt = f" (🎟 {s['cupon_aplicado']})" if s.get('cupon_aplicado') else ""
+        txt_admin = f"🚨 NUEVA ORDEN (${s['total_temporal']}){cupon_txt}\n👤 {s['cliente']}\n📍 {s.get('zona_envio', '-')}\n"
         for i in s['carrito']:
             txt_admin += f"- {i['nombre']} ({'NFC' if i['nfc'] else 'No'})\n"
         
@@ -302,4 +354,3 @@ async def manejar_foto(update: Update, context: ContextTypes.DEFAULT_TYPE):
             except: pass
         
         await context.bot.send_message(chat_id, "📩 ¡Recibido! Verificando comprobante.")
-        
